@@ -1774,6 +1774,44 @@ static bool audiod_set_interface(uint8_t rhport, tusb_control_request_t const * 
 
             // Enable SOF interrupt if callback is implemented
             if (tud_audio_feedback_interval_isr) usbd_sof_enable(rhport, true);
+
+            // Prepare feedback computation if callback is available
+            if (tud_audio_feedback_params_cb)
+            {
+              audio_feedback_params_t fb_param;
+
+              tud_audio_feedback_params_cb(func_id, alt, &fb_param);
+              audio->feedback.compute_method = fb_param.method;
+
+              // Minimal/Maximum value in 16.16 format for full speed (1ms per frame) or high speed (125 us per frame)
+              uint32_t const frame_div  = (TUSB_SPEED_FULL == tud_speed_get()) ? 1000 : 8000;
+              audio->feedback.min_value = (fb_param.sample_freq/frame_div - 1) << 16;
+              audio->feedback.max_value = (fb_param.sample_freq/frame_div + 1) << 16;
+
+              switch(fb_param.method)
+              {
+                case AUDIO_FEEDBACK_METHOD_FREQUENCY_FIXED:
+                case AUDIO_FEEDBACK_METHOD_FREQUENCY_FLOAT:
+                case AUDIO_FEEDBACK_METHOD_FREQUENCY_POWER_OF_2:
+                  set_fb_params_freq(audio, fb_param.sample_freq, fb_param.frequency.mclk_freq);
+                break;
+
+                #if 0 // implement later
+                case AUDIO_FEEDBACK_METHOD_FIFO_COUNT:
+                {
+                  uint64_t fb64 = ((uint64_t) fb_param.sample_freq) << 16;
+                  audio->feedback.compute.fifo_count.nominal_value = (uint32_t) (fb64 / frame_div);
+                  audio->feedback.compute.fifo_count.threshold_bytes = fb_param.fifo_count.threshold_bytes;
+
+                  tud_audio_fb_set(audio->feedback.compute.fifo_count.nominal_value);
+                }
+                break;
+                #endif
+
+                // nothing to do
+                default: break;
+              }
+            }
           }
   #endif
 #endif // CFG_TUD_AUDIO_ENABLE_EP_OUT
@@ -1787,46 +1825,6 @@ static bool audiod_set_interface(uint8_t rhport, tusb_control_request_t const * 
 
       // Invoke one callback for a final set interface
       if (tud_audio_set_itf_cb) TU_VERIFY(tud_audio_set_itf_cb(rhport, p_request));
-
-#if CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP
-      // Prepare feedback computation if callback is available
-      if (tud_audio_feedback_params_cb)
-      {
-        audio_feedback_params_t fb_param;
-
-        tud_audio_feedback_params_cb(func_id, alt, &fb_param);
-        audio->feedback.compute_method = fb_param.method;
-
-        // Minimal/Maximum value in 16.16 format for full speed (1ms per frame) or high speed (125 us per frame)
-        uint32_t const frame_div  = (TUSB_SPEED_FULL == tud_speed_get()) ? 1000 : 8000;
-        audio->feedback.min_value = (fb_param.sample_freq/frame_div - 1) << 16;
-        audio->feedback.max_value = (fb_param.sample_freq/frame_div + 1) << 16;
-
-        switch(fb_param.method)
-        {
-          case AUDIO_FEEDBACK_METHOD_FREQUENCY_FIXED:
-          case AUDIO_FEEDBACK_METHOD_FREQUENCY_FLOAT:
-          case AUDIO_FEEDBACK_METHOD_FREQUENCY_POWER_OF_2:
-            set_fb_params_freq(audio, fb_param.sample_freq, fb_param.frequency.mclk_freq);
-          break;
-
-          #if 0 // implement later
-          case AUDIO_FEEDBACK_METHOD_FIFO_COUNT:
-          {
-            uint64_t fb64 = ((uint64_t) fb_param.sample_freq) << 16;
-            audio->feedback.compute.fifo_count.nominal_value = (uint32_t) (fb64 / frame_div);
-            audio->feedback.compute.fifo_count.threshold_bytes = fb_param.fifo_count.threshold_bytes;
-
-            tud_audio_fb_set(audio->feedback.compute.fifo_count.nominal_value);
-          }
-          break;
-          #endif
-
-          // nothing to do
-          default: break;
-        }
-      }
-#endif // CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP
 
       // We are done - abort loop
       break;
